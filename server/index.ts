@@ -8,7 +8,13 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { JsonlWatcher, type WatchedFile } from "./watcher.js";
 import { processTranscriptLine } from "./parser.js";
 import { GstackWatcher } from "./gstackWatcher.js";
-import { processGstackLine, extractRole, extractSessionId, extractTimestamp, SESSION_GAP_MS } from "./gstackParser.js";
+import {
+  processGstackLine,
+  extractRole,
+  extractSessionId,
+  extractTimestamp,
+  SESSION_GAP_MS,
+} from "./gstackParser.js";
 import {
   loadCharacterSprites,
   loadWallTiles,
@@ -28,9 +34,12 @@ let nextAgentId = 1;
 const clients = new Set<WebSocket>();
 let lastActivityTime = Date.now();
 
-// gstack state
-const gstackAgents = new Map<string, TrackedAgent>(); // role -> agent
+// ── gstack state ─────────────────────────────────────────────────────────────
+/** role string → TrackedAgent, for all active gstack characters */
+const gstackAgents = new Map<string, TrackedAgent>();
+/** Session ID seen in the last processed gstack line, or null */
 let currentGstackSessionId: string | null = null;
+/** Unix-ms timestamp of the last processed gstack line (for gap detection) */
 let lastGstackLineTs = 0;
 
 // Load assets at startup
@@ -257,7 +266,7 @@ watcher.on("line", (file: WatchedFile, line: string) => {
   processTranscriptLine(line, agent, broadcast);
 });
 
-// gstack watcher
+// ── gstack watcher ────────────────────────────────────────────────────────────
 const gstackWatcher = new GstackWatcher();
 
 gstackWatcher.on("line", (rawLine: string) => {
@@ -268,19 +277,26 @@ gstackWatcher.on("line", (rawLine: string) => {
     return;
   }
 
-  const role = extractRole(record);
+  const role      = extractRole(record);
   const sessionId = extractSessionId(record);
-  const ts = extractTimestamp(record);
+  const ts        = extractTimestamp(record);
 
-  // Detect session boundary: explicit session ID change or 60s gap between lines
-  const sessionChanged = sessionId !== null && currentGstackSessionId !== null && sessionId !== currentGstackSessionId;
-  const timeGap = lastGstackLineTs > 0 && ts - lastGstackLineTs > SESSION_GAP_MS;
+  // ── Session boundary detection ──────────────────────────────────────────
+  // A boundary occurs when the session ID changes OR when more than 60 s
+  // elapses between consecutive lines with no sessionId field.
+  const sessionChanged =
+    sessionId !== null &&
+    currentGstackSessionId !== null &&
+    sessionId !== currentGstackSessionId;
+  const timeGap =
+    lastGstackLineTs > 0 && ts - lastGstackLineTs > SESSION_GAP_MS;
 
   if (sessionChanged || timeGap) {
+    // Close all current gstack characters
     for (const agent of gstackAgents.values()) {
       agents.delete(`gstack:${agent.sessionId}`);
       broadcast({ type: "agentClosed", id: agent.id });
-      console.log(`[gstack] Agent ${agent.id} left: ${agent.projectName} (session boundary)`);
+      console.log(`[gstack] Agent ${agent.id} closed: ${agent.projectName} (session boundary)`);
     }
     gstackAgents.clear();
   }
@@ -289,25 +305,26 @@ gstackWatcher.on("line", (rawLine: string) => {
   lastGstackLineTs = ts;
   lastActivityTime = Date.now();
 
-  // Get or create agent for this role
+  // ── Per-role character spawning ─────────────────────────────────────────
+  // Each unique normalised role string gets exactly one character in the office.
   let agent = gstackAgents.get(role);
   if (!agent) {
     agent = {
-      id: nextAgentId++,
-      sessionId: role,
-      projectDir: "",
-      projectName: role.toUpperCase(),
-      jsonlFile: gstackWatcher.path,
-      fileOffset: 0,
-      lineBuffer: "",
-      activity: "idle",
-      activeTools: new Map(),
-      activeToolNames: new Map(),
-      activeSubagentToolIds: new Map(),
+      id:          nextAgentId++,
+      sessionId:   role,            // used as the map key inside gstackAgents
+      projectDir:  "",
+      projectName: role.toUpperCase(),  // shown as character label in the UI
+      jsonlFile:   gstackWatcher.filePath,
+      fileOffset:  0,
+      lineBuffer:  "",
+      activity:    "idle",
+      activeTools:            new Map(),
+      activeToolNames:        new Map(),
+      activeSubagentToolIds:  new Map(),
       activeSubagentToolNames: new Map(),
-      isWaiting: false,
-      permissionSent: false,
-      hadToolsInTurn: false,
+      isWaiting:       false,
+      permissionSent:  false,
+      hadToolsInTurn:  false,
       lastActivityTime: Date.now(),
     };
     gstackAgents.set(role, agent);

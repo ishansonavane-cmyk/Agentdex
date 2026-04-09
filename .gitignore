@@ -1,19 +1,6 @@
 node_modules/
 dist/
 .DS_Store
-assets/tileset/
-assets/office_tileset_16x16.png
 webview-ui/node_modules/
 .server.pid
-/tmp/
-
-# Personal/office photos and floor plans
-sd-office/
-
-# Playwright MCP debug logs
-.playwright-mcp/
-
-# Screenshots
-pixel-agents-current.png
-*.HEIC
-*.MOV
+*.log
