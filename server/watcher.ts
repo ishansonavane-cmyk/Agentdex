@@ -5,8 +5,10 @@ import { homedir } from "os";
 import { EventEmitter } from "events";
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
-const ACTIVE_THRESHOLD_MS = 600_000; // 10 minutes — Claude can think for 5+ min without writing
+const SCAN_THRESHOLD_MS = 24 * 60 * 60_000; // 24 hours — pick up any session from today
+const STALE_THRESHOLD_MS = 2 * 60 * 60_000; // 2 hours — remove sessions idle for 2+ hrs
 const POLL_INTERVAL_MS = 1000;
+const RESCAN_INTERVAL_MS = 30_000; // rescan every 30s to catch files missed by chokidar
 
 export interface WatchedFile {
   path: string;
@@ -38,6 +40,9 @@ export class JsonlWatcher extends EventEmitter {
     });
 
     this.pollInterval = setInterval(() => this.pollFiles(), POLL_INTERVAL_MS);
+
+    // Periodic rescan as fallback for files missed by chokidar on Windows
+    setInterval(() => this.scanForActiveFiles(), RESCAN_INTERVAL_MS);
   }
 
   stop(): void {
@@ -57,7 +62,7 @@ export class JsonlWatcher extends EventEmitter {
             if (!f.endsWith(".jsonl")) continue;
             const filePath = join(dirPath, f);
             const stat = statSync(filePath);
-            if (Date.now() - stat.mtimeMs < ACTIVE_THRESHOLD_MS) {
+            if (Date.now() - stat.mtimeMs < SCAN_THRESHOLD_MS) {
               this.addFile(filePath);
             }
           }
@@ -102,7 +107,7 @@ export class JsonlWatcher extends EventEmitter {
           this.readNewLines(file);
         }
         // Remove stale files
-        if (Date.now() - stat.mtimeMs > ACTIVE_THRESHOLD_MS) {
+        if (Date.now() - stat.mtimeMs > STALE_THRESHOLD_MS) {
           this.files.delete(path);
           this.emit("fileRemoved", file);
         }
