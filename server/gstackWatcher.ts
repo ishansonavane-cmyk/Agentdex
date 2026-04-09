@@ -1,5 +1,5 @@
 /**
- * GstackWatcher — tails ~/.gstack/analytics.jsonl for new lines.
+ * GstackWatcher — tails ~/.gstack/analytics/skill-usage.jsonl for new lines.
  *
  * Lifecycle:
  *   1. Polls every 3 s until the file appears (logs waiting message once).
@@ -23,7 +23,7 @@ function resolveGstackLogPath(): string {
     process.platform === "win32"
       ? (process.env.USERPROFILE ?? homedir())
       : (process.env.HOME ?? homedir());
-  return join(home, ".gstack", "analytics.jsonl");
+  return join(home, ".gstack", "analytics", "skill-usage.jsonl");
 }
 
 const POLL_INTERVAL_MS = 3_000;

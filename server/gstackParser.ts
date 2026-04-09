@@ -101,7 +101,12 @@ export function extractSessionId(record: Record<string, unknown>): string | null
 /** Extract timestamp in Unix ms (falls back to Date.now()). */
 export function extractTimestamp(record: Record<string, unknown>): number {
   const ts = record.ts ?? record.timestamp;
-  return typeof ts === "number" ? ts : Date.now();
+  if (typeof ts === "number") return ts;
+  if (typeof ts === "string") {
+    const parsed = Date.parse(ts);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return Date.now();
 }
 
 // ── Tool status builder ────────────────────────────────────────────────────

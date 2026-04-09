@@ -27,6 +27,8 @@ export class JsonlWatcher extends EventEmitter {
     this.watcher = watch(CLAUDE_PROJECTS_DIR, {
       ignoreInitial: true,
       depth: 3,
+      usePolling: true,
+      interval: 1000,
     });
 
     this.watcher.on("add", (filePath: string) => {
