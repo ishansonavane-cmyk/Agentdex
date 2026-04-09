@@ -7,6 +7,8 @@ import { fileURLToPath } from "url";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { JsonlWatcher, type WatchedFile } from "./watcher.js";
 import { processTranscriptLine } from "./parser.js";
+import { GstackWatcher } from "./gstackWatcher.js";
+import { processGstackLine, extractRole, extractSessionId, extractTimestamp, SESSION_GAP_MS } from "./gstackParser.js";
 import {
   loadCharacterSprites,
   loadWallTiles,
@@ -25,6 +27,11 @@ const agents = new Map<string, TrackedAgent>(); // sessionId -> agent
 let nextAgentId = 1;
 const clients = new Set<WebSocket>();
 let lastActivityTime = Date.now();
+
+// gstack state
+const gstackAgents = new Map<string, TrackedAgent>(); // role -> agent
+let currentGstackSessionId: string | null = null;
+let lastGstackLineTs = 0;
 
 // Load assets at startup
 // In dev mode (tsx), __dirname is server/ so assets are at ../webview-ui/public/assets/
@@ -250,8 +257,71 @@ watcher.on("line", (file: WatchedFile, line: string) => {
   processTranscriptLine(line, agent, broadcast);
 });
 
+// gstack watcher
+const gstackWatcher = new GstackWatcher();
+
+gstackWatcher.on("line", (rawLine: string) => {
+  let record: Record<string, unknown>;
+  try {
+    record = JSON.parse(rawLine);
+  } catch {
+    return;
+  }
+
+  const role = extractRole(record);
+  const sessionId = extractSessionId(record);
+  const ts = extractTimestamp(record);
+
+  // Detect session boundary: explicit session ID change or 60s gap between lines
+  const sessionChanged = sessionId !== null && currentGstackSessionId !== null && sessionId !== currentGstackSessionId;
+  const timeGap = lastGstackLineTs > 0 && ts - lastGstackLineTs > SESSION_GAP_MS;
+
+  if (sessionChanged || timeGap) {
+    for (const agent of gstackAgents.values()) {
+      agents.delete(`gstack:${agent.sessionId}`);
+      broadcast({ type: "agentClosed", id: agent.id });
+      console.log(`[gstack] Agent ${agent.id} left: ${agent.projectName} (session boundary)`);
+    }
+    gstackAgents.clear();
+  }
+
+  if (sessionId !== null) currentGstackSessionId = sessionId;
+  lastGstackLineTs = ts;
+  lastActivityTime = Date.now();
+
+  // Get or create agent for this role
+  let agent = gstackAgents.get(role);
+  if (!agent) {
+    agent = {
+      id: nextAgentId++,
+      sessionId: role,
+      projectDir: "",
+      projectName: role.toUpperCase(),
+      jsonlFile: gstackWatcher.path,
+      fileOffset: 0,
+      lineBuffer: "",
+      activity: "idle",
+      activeTools: new Map(),
+      activeToolNames: new Map(),
+      activeSubagentToolIds: new Map(),
+      activeSubagentToolNames: new Map(),
+      isWaiting: false,
+      permissionSent: false,
+      hadToolsInTurn: false,
+      lastActivityTime: Date.now(),
+    };
+    gstackAgents.set(role, agent);
+    agents.set(`gstack:${role}`, agent);
+    broadcast({ type: "agentCreated", id: agent.id, folderName: agent.projectName });
+    console.log(`[gstack] Agent ${agent.id} joined: ${agent.projectName}`);
+  }
+
+  processGstackLine(rawLine, agent, broadcast);
+});
+
 // Start
 watcher.start();
+gstackWatcher.start();
 server.listen(PORT, () => {
   console.log(`Pixel Agents server running at http://localhost:${PORT}`);
   console.log(`Watching ~/.claude/projects/ for active sessions...`);
@@ -262,6 +332,7 @@ setInterval(() => {
   if (agents.size === 0 && clients.size === 0 && Date.now() - lastActivityTime > IDLE_SHUTDOWN_MS) {
     console.log("No active sessions or clients for 10 minutes, shutting down...");
     watcher.stop();
+    gstackWatcher.stop();
     server.close();
     process.exit(0);
   }
@@ -270,6 +341,7 @@ setInterval(() => {
 // Graceful shutdown
 process.on("SIGINT", () => {
   watcher.stop();
+  gstackWatcher.stop();
   server.close();
   process.exit(0);
 });
